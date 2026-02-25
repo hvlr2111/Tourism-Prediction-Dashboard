@@ -398,75 +398,227 @@ function ChatbotTab() {
         console.warn('Web search failed, proceeding without it:', searchError);
       }
 
-      // 2. Get TDMS data if user asks about specific sites or dates
-      if (message.toLowerCase().includes('site') || message.toLowerCase().includes('location') || 
-          message.toLowerCase().includes('place') || message.toLowerCase().includes('vli') ||
-          message.toLowerCase().includes('visitors') || message.toLowerCase().includes('capacity')) {
-        try {
-          // Get available sites
-          const sitesResponse = await fetch('http://localhost:8000/api/tdms/sites');
-          if (sitesResponse.ok) {
-            const sitesData = await sitesResponse.json();
-            if (sitesData.sites && sitesData.sites.length > 0) {
-              contextData.tdmsData = `\n\nAvailable tourism sites in dataset: ${sitesData.sites.slice(0, 10).join(', ')}...`;
-              
-              // If user mentions a specific site, get its data
-              const mentionedSite = sitesData.sites.find(site => 
-                message.toLowerCase().includes(site.toLowerCase())
-              );
-              if (mentionedSite) {
-                const siteResponse = await fetch(`http://localhost:8000/api/tdms/site/${encodeURIComponent(mentionedSite)}`);
-                if (siteResponse.ok) {
-                  const siteInfo = await siteResponse.json();
-                  if (siteInfo.data && siteInfo.data.length > 0) {
-                    const latestData = siteInfo.data[siteInfo.data.length - 1];
-                    contextData.tdmsData += `\n\nLatest data for ${mentionedSite}:\n- Predicted visitors: ${latestData.predicted_total_visitors}\n- VLI score: ${latestData.vli_score}\n- Statistical capacity: ${latestData.statistical_capacity}\n- Date: ${latestData.date}`;
-                  }
-                }
+      // 2. Get comprehensive dashboard data for better context
+      try {
+        // Always get forecast scenarios for context
+        const scenariosResponse = await fetch('http://localhost:8000/api/forecasts/scenarios');
+        if (scenariosResponse.ok) {
+          const scenariosData = await scenariosResponse.json();
+          if (scenariosData.baseline && scenariosData.baseline.length > 0) {
+            const latestData = scenariosData.baseline.slice(-3); // Last 3 months
+            contextData.forecasts = '\n\nRecent tourism forecasts (last 3 months):\n' +
+              latestData.map(d => `- ${d.date}: ${d.arrivals_forecast || d.total_forecast} arrivals (growth: ${d.growth_rate ? d.growth_rate.toFixed(1) : 'N/A'}%)`).join('\n');
+            
+            // Add external factors if available
+            const latestWithFactors = scenariosData.baseline.slice(-1)[0];
+            if (latestWithFactors && latestWithFactors.external_factor_contributions_pct) {
+              const factors = Object.entries(latestWithFactors.external_factor_contributions_pct)
+                .filter(([_, value]) => value && parseFloat(value) !== 0)
+                .map(([key, value]) => `${key}: ${value}%`)
+                .join(', ');
+              if (factors) {
+                contextData.forecasts += `\nExternal factors affecting latest forecast: ${factors}`;
               }
             }
           }
-        } catch (tdmsError) {
-          console.warn('TDMS data fetch failed:', tdmsError);
         }
+      } catch (forecastError) {
+        console.warn('Forecast data fetch failed:', forecastError);
       }
 
-      // 3. Get forecast data if user asks about predictions
-      if (message.toLowerCase().includes('forecast') || message.toLowerCase().includes('prediction') ||
-          message.toLowerCase().includes('future') || message.toLowerCase().includes('trend')) {
-        try {
-          // Get daily predictions
-          const dailyResponse = await fetch('http://localhost:8000/api/forecasts/daily');
-          if (dailyResponse.ok) {
-            const dailyData = await dailyResponse.json();
-            if (dailyData.baseline && dailyData.baseline.length > 0) {
-              const nextMonth = dailyData.baseline.slice(0, 3);
-              contextData.dailyPredictions = '\n\nUpcoming tourism predictions (next 3 months):\n' +
-                nextMonth.map(d => `- ${d.date}: ${d.total_forecast} forecasted arrivals`).join('\n');
-            }
-          }
+      // 3. Get TDMS data for comprehensive site information
+      try {
+        // Get available sites and latest dashboard data
+        const [sitesResponse, dashboardResponse] = await Promise.all([
+          fetch('http://localhost:8000/api/tdms/sites'),
+          fetch('http://localhost:8000/api/tdms/dashboard/' + new Date().toISOString().split('T')[0])
+        ]);
 
-          // Get forecast scenarios
-          const scenariosResponse = await fetch('http://localhost:8000/api/forecasts/scenarios');
-          if (scenariosResponse.ok) {
-            const scenariosData = await scenariosResponse.json();
-            if (scenariosData.baseline && scenariosData.baseline.length > 0) {
-              contextData.forecasts = '\n\nForecast scenarios available: baseline, optimistic, pessimistic';
+        if (sitesResponse.ok) {
+          const sitesData = await sitesResponse.json();
+          if (sitesData.sites && sitesData.sites.length > 0) {
+            contextData.tdmsData = `\n\nAvailable tourism sites (${sitesData.sites.length}): ${sitesData.sites.slice(0, 15).join(', ')}${sitesData.sites.length > 15 ? '...' : ''}`;
+            
+            // If user mentions a specific site, get detailed data
+            const mentionedSite = sitesData.sites.find(site => {
+              const siteLower = site.toLowerCase();
+              const messageLower = message.toLowerCase();
+              
+              // Check for exact match or partial match
+              if (messageLower.includes(siteLower)) return true;
+              
+              // Check for common variations/shortcuts
+              const siteVariations = {
+                'sigiriya': 'sigiriya rock & museum',
+                'galle': 'galle fort',
+                'kandy': 'temple of the tooth (kandy)',
+                'polonnaruwa': 'polonnaruwa (gal viharaya & ruins)',
+                'sinharaja': 'sinharaja conservation forest',
+                'udawalawe': 'udawalawe national park',
+                'wilpattu': 'wilpattu national park',
+                'yala': 'yala national park',
+                'knuckles': 'knuckles conservation forest',
+                'horton plains': 'horton plains (world\'s end)',
+                'jaffna': 'jaffna fort',
+                'dambulla': 'dambulla cave temple',
+                'adams peak': 'adam\'s peak (sri pada)',
+                'mirissa': 'mirissa (whale watching)',
+                'kaudulla': 'kaudulla national park'
+              };
+              
+              // Check if message contains any variation
+              for (const [variation, fullName] of Object.entries(siteVariations)) {
+                if (messageLower.includes(variation) && siteLower === fullName.toLowerCase()) {
+                  return true;
+                }
+              }
+              
+              return false;
+            });
+            
+            if (mentionedSite) {
+              try {
+                const [siteResponse, monthlyResponse, trendResponse] = await Promise.all([
+                  fetch(`http://localhost:8000/api/tdms/site/${encodeURIComponent(mentionedSite)}`),
+                  fetch(`http://localhost:8000/api/tdms/monthly/${mentionedSite}/${new Date().getFullYear()}`),
+                  fetch(`http://localhost:8000/api/tdms/weekly-trend/${encodeURIComponent(mentionedSite)}`)
+                ]);
+                
+                if (siteResponse.ok) {
+                  const siteInfo = await siteResponse.json();
+                  if (siteInfo.data && siteInfo.data.length > 0) {
+                    // Check if user is asking for a specific month
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                       'july', 'august', 'september', 'october', 'november', 'december'];
+                    const mentionedMonth = monthNames.find(month => 
+                      message.toLowerCase().includes(month)
+                    );
+                    
+                    let targetYear = new Date().getFullYear();
+                    const yearMatch = message.match(/\b(20\d{2})\b/);
+                    if (yearMatch) {
+                      targetYear = parseInt(yearMatch[1]);
+                    }
+                    
+                    // Check if we have data for the requested year, if not suggest available years
+                    const availableYears = [...new Set(siteInfo.data.map(item => new Date(item.date).getFullYear()))];
+                    if (!availableYears.includes(targetYear)) {
+                      contextData.tdmsData += `\n\nNote: Data for ${targetYear} is not available. Available years: ${availableYears.join(', ')}. Showing data for ${availableYears[0]} instead:`;
+                      targetYear = availableYears[0];
+                    }
+                    
+                    if (mentionedMonth) {
+                      // Find data for the specific month and year
+                      const monthIndex = monthNames.indexOf(mentionedMonth);
+                      const monthData = siteInfo.data.filter(item => {
+                        const itemDate = new Date(item.date);
+                        return itemDate.getMonth() === monthIndex && itemDate.getFullYear() === targetYear;
+                      });
+                      
+                      if (monthData.length > 0) {
+                        const avgVisitors = Math.round(monthData.reduce((sum, item) => sum + item.predicted_total_visitors, 0) / monthData.length);
+                        const avgVLI = (monthData.reduce((sum, item) => sum + item.vli_score, 0) / monthData.length).toFixed(1);
+                        contextData.tdmsData += `\n\n${mentionedSite} - ${mentionedMonth.charAt(0).toUpperCase() + mentionedMonth.slice(1)} ${targetYear}:\n- Average predicted visitors: ${avgVisitors} per day\n- Average VLI score: ${avgVLI}\n- Statistical capacity: ${monthData[0].statistical_capacity}\n- Data points: ${monthData.length} days`;
+                      } else {
+                        // Try to get the closest available month
+                        const sortedData = siteInfo.data.sort((a, b) => new Date(a.date) - new Date(b.date));
+                        const closestDate = sortedData.find(item => {
+                          const itemDate = new Date(item.date);
+                          return itemDate.getMonth() === monthIndex;
+                        });
+                        
+                        if (closestDate) {
+                          contextData.tdmsData += `\n\n${mentionedSite} - ${mentionedMonth.charAt(0).toUpperCase() + mentionedMonth.slice(1)} (closest available data):\n- Predicted visitors: ${closestDate.predicted_total_visitors} (date: ${closestDate.date})\n- VLI score: ${closestDate.vli_score}\n- Statistical capacity: ${closestDate.statistical_capacity}`;
+                        }
+                      }
+                    } else {
+                      // Show latest data and recent trends
+                      const latestData = siteInfo.data[siteInfo.data.length - 1];
+                      const recentData = siteInfo.data.slice(-7); // Last 7 days
+                      const avgRecentVisitors = Math.round(recentData.reduce((sum, item) => sum + item.predicted_total_visitors, 0) / recentData.length);
+                      
+                      contextData.tdmsData += `\n\nDetailed data for ${mentionedSite}:\n- Latest predicted visitors: ${latestData.predicted_total_visitors} (${latestData.date})\n- 7-day average: ${avgRecentVisitors} visitors\n- Latest VLI score: ${latestData.vli_score}\n- Statistical capacity: ${latestData.statistical_capacity}`;
+                    }
+                  }
+                }
+                
+                if (monthlyResponse.ok) {
+                  const monthlyInfo = await monthlyResponse.json();
+                  if (monthlyInfo.monthly_data && monthlyInfo.monthly_data.length > 0) {
+                    const latestMonthly = monthlyInfo.monthly_data[monthlyInfo.monthly_data.length - 1];
+                    contextData.tdmsData += `\n- Monthly trend: ${latestMonthly.predicted_total_visitors} visitors (capacity utilization: ${latestMonthly.capacity_utilization}%)`;
+                  }
+                }
+                
+                // Add 5-Year Trajectory data
+                if (trendResponse.ok) {
+                  const trendInfo = await trendResponse.json();
+                  if (trendInfo.data && trendInfo.data.length > 0) {
+                    const trendStart = trendInfo.data[0];
+                    const trendEnd = trendInfo.data[trendInfo.data.length - 1];
+                    const growthRate = ((trendEnd.predicted_total_visitors - trendStart.predicted_total_visitors) / trendStart.predicted_total_visitors * 100).toFixed(1);
+                    
+                    contextData.tdmsData += `\n\n5-Year Trajectory for ${mentionedSite}:\n- Period: ${trendStart.date} to ${trendEnd.date}\n- Growth rate: ${growthRate}%\n- Starting visitors: ${trendStart.predicted_total_visitors}\n- Latest visitors: ${trendEnd.predicted_total_visitors}\n- Data points: ${trendInfo.data.length} weekly observations`;
+                  }
+                }
+              } catch (siteError) {
+                console.warn('Detailed site data fetch failed:', siteError);
+              }
             }
           }
-        } catch (forecastError) {
-          console.warn('Forecast data fetch failed:', forecastError);
         }
+
+        if (dashboardResponse.ok) {
+          const dashboardData = await dashboardResponse.json();
+          if (dashboardData.summary) {
+            contextData.tdmsData += `\n\nOverall tourism system summary:\n- Total sites monitored: ${dashboardData.summary.total_sites || 'N/A'}\n- Total predicted visitors: ${dashboardData.summary.total_predicted_visitors || 'N/A'}\n- Average VLI score: ${dashboardData.summary.avg_vli_score || 'N/A'}\n- High utilization sites: ${dashboardData.summary.high_utilization_sites || 'N/A'}`;
+          }
+          
+          // Add National Grid Heatmap data
+          if (dashboardData.vli_scores && dashboardData.vli_scores.length > 0) {
+            contextData.tdmsData += `\n\nNational Grid Heatmap (${dashboardData.vli_scores.length} sites):\n`;
+            dashboardData.vli_scores.slice(0, 10).forEach(site => {
+              const utilization = site.vli_score > 120 ? 'Overcrowded' : 
+                                 site.vli_score > 100 ? 'High utilization' :
+                                 site.vli_score > 80 ? 'Moderate utilization' : 'Low utilization';
+              contextData.tdmsData += `- ${site.site}: ${Math.round(site.vli_score)}% (${site.visitors} visitors) - ${utilization}\n`;
+            });
+            
+            if (dashboardData.vli_scores.length > 10) {
+              contextData.tdmsData += `... and ${dashboardData.vli_scores.length - 10} more sites`;
+            }
+          }
+        }
+      } catch (tdmsError) {
+        console.warn('TDMS data fetch failed:', tdmsError);
+      }
+
+      // 4. Get daily predictions for short-term forecasts
+      try {
+        const dailyResponse = await fetch('http://localhost:8000/api/forecasts/daily');
+        if (dailyResponse.ok) {
+          const dailyData = await dailyResponse.json();
+          if (dailyData.baseline && dailyData.baseline.length > 0) {
+            const nextWeek = dailyData.baseline.slice(0, 7);
+            contextData.dailyPredictions = '\n\nDaily predictions (next 7 days):\n' +
+              nextWeek.map(d => `- ${d.date}: ${d.total_forecast} forecasted arrivals`).join('\n');
+          }
+        }
+      } catch (dailyError) {
+        console.warn('Daily predictions fetch failed:', dailyError);
       }
 
       // Build comprehensive prompt with all context
-      const prompt = `You are a helpful AI assistant specializing in tourism analytics and Sri Lanka tourism. You have access to real-time data from the tourism analytics dashboard.
+      const prompt = `You are a helpful AI assistant specializing in tourism analytics and Sri Lanka tourism. You have access to comprehensive real-time data from the tourism analytics dashboard.
 
 Available data sources:
-- Current web search results for latest information
-- TDMS (Tourism Destination Management System) data with site-specific visitor predictions and VLI scores
-- Tourism forecasts with multiple scenarios (baseline, optimistic, pessimistic)
-- Daily and monthly predictions for tourism arrivals
+- Current web search results for latest tourism information
+- TDMS (Tourism Destination Management System) data with site-specific visitor predictions, VLI scores, and capacity utilization
+- National Grid Heatmap showing all 15 sites with current utilization levels
+- 5-Year Trajectory data for long-term growth trends
+- Tourism forecasts with growth rates and external factor contributions
+- Daily predictions for short-term forecasting
+- Monthly trends and overall system summary
 
 ${contextData.webSearch}
 ${contextData.tdmsData}
@@ -475,7 +627,15 @@ ${contextData.dailyPredictions}
 
 User question: ${message}
 
-Provide a comprehensive and helpful response using the available data above. If specific data isn't available for the query, clearly state that and provide general guidance based on tourism best practices.`;
+Provide a comprehensive and helpful response using the available data above. You now have access to:
+1. Recent tourism forecasts with growth rates and external factors
+2. Detailed site-specific information including VLI scores and capacity utilization
+3. National Grid Heatmap data showing current utilization for all 15 sites
+4. 5-Year Trajectory analysis for long-term growth trends
+5. Overall tourism system summaries and trends
+6. Daily predictions for short-term planning
+
+Use this data to provide specific, data-driven insights. If specific data isn't available for the query, clearly state that and provide general guidance based on tourism best practices.`;
 
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
