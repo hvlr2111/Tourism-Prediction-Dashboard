@@ -17,6 +17,9 @@ import {
   onSnapshot,
   deleteDoc
 } from 'firebase/firestore';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 
 // Chat History Sidebar Component
 function ChatHistorySidebar({ 
@@ -897,20 +900,48 @@ Use this data to provide specific, data-driven insights. If specific data isn't 
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3 mt-3">
                 {messages.map((message, index) => (
                   <div
                     key={index}
                     className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`px-4 py-3 rounded-lg max-w-2xl break-words ${
+                      className={`px-4 py-3 rounded-lg break-words ${
                         message.sender === 'user'
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-200 text-gray-800'
+                          ? 'bg-blue-600 text-white max-w-[75%] md:max-w-[75%] lg:max-w-[75%]'
+                          : 'bg-white text-gray-800 border border-gray-200 shadow-sm max-w-[90%] md:max-w-[75%] lg:max-w-[75%]'
                       }`}
                     >
-                      {message.text}
+                      {message.sender === 'user' ? (
+                        <div className="text-sm leading-relaxed">{message.text}</div>
+                      ) : (
+                        <div className="prose prose-sm max-w-none">
+                          <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]} 
+                            rehypePlugins={[rehypeRaw]}
+                            components={{
+                              strong: ({node, ...props}) => <strong className="font-bold text-gray-900" {...props} />,
+                              em: ({node, ...props}) => <em className="italic text-gray-700" {...props} />,
+                              p: ({node, ...props}) => <p className="mb-3 leading-relaxed text-sm" {...props} />,
+                              ul: ({node, ...props}) => <ul className="list-disc ml-6 mb-3 space-y-1" {...props} />,
+                              ol: ({node, ...props}) => <ol className="list-decimal ml-6 mb-3 space-y-1" {...props} />,
+                              li: ({node, ...props}) => <li className="mb-1 text-sm" {...props} />,
+                              h1: ({node, ...props}) => <h1 className="text-lg font-bold mb-2 text-gray-900" {...props} />,
+                              h2: ({node, ...props}) => <h2 className="text-base font-bold mb-2 text-gray-900" {...props} />,
+                              h3: ({node, ...props}) => <h3 className="text-sm font-bold mb-1 text-gray-900" {...props} />,
+                              code: ({node, inline, ...props}) => (
+                                inline 
+                                  ? <code className="bg-gray-200 px-1 py-0.5 rounded text-xs font-mono" {...props} />
+                                  : <pre className="bg-gray-100 p-3 rounded text-xs font-mono overflow-x-auto mt-2" {...props} />
+                              ),
+                              blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-gray-300 pl-4 italic text-gray-600 my-2" {...props} />,
+                            }}
+                          >
+                            {message.text}
+                          </ReactMarkdown>
+                        </div>
+                      )}
                       {message.sources && message.sources.length > 0 && (
                         <div className="mt-2 text-xs opacity-75 border-t pt-2">
                           <p className="font-semibold">Sources:</p>
